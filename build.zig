@@ -54,17 +54,30 @@ pub fn build(b: *std.Build) void {
 
     const tracy_src = b.dependency("tracy_src", .{});
 
+    // Zig 0.16+ removed @cImport: translate TracyC.h at build time with the same defines
+    // the client library is compiled with.
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = tracy_src.path("./public/tracy/TracyC.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    translate_c.addIncludePath(tracy_src.path("./public"));
+
     const tracy_module = b.addModule("tracy", .{
         .root_source_file = b.path("./src/tracy.zig"),
+        .target = target,
+        .optimize = optimize,
         .imports = &.{
             .{
                 .name = "tracy-options",
                 .module = options.createModule(),
             },
+            .{
+                .name = "tracy-c",
+                .module = translate_c.createModule(),
+            },
         },
     });
-
-    tracy_module.addIncludePath(tracy_src.path("./public"));
 
     const tracy_client = if (shared) b.addLibrary(.{
         .name = "tracy",
@@ -99,60 +112,98 @@ pub fn build(b: *std.Build) void {
             header[1],
         );
     }
-    if (tracy_enable)
+    if (tracy_enable) {
         tracy_client.root_module.addCMacro("TRACY_ENABLE", "1");
-    if (tracy_on_demand)
-        tracy_client.root_module.addCMacro("TRACY_ON_DEMAND", "1");
-    if (tracy_callstack) |depth| {
-        tracy_client.root_module.addCMacro("TRACY_CALLSTACK", "\"" ++ digits2(depth) ++ "\"");
+        translate_c.defineCMacro("TRACY_ENABLE", "1");
     }
-    if (tracy_no_callstack)
+    if (tracy_on_demand) {
+        tracy_client.root_module.addCMacro("TRACY_ON_DEMAND", "1");
+        translate_c.defineCMacro("TRACY_ON_DEMAND", "1");
+    }
+    if (tracy_callstack) |depth| {
+        tracy_client.root_module.addCMacro("TRACY_CALLSTACK", b.fmt("{d}", .{depth}));
+        translate_c.defineCMacro("TRACY_CALLSTACK", b.fmt("{d}", .{depth}));
+    }
+    if (tracy_no_callstack) {
         tracy_client.root_module.addCMacro("TRACY_NO_CALLSTACK", "1");
-    if (tracy_no_callstack_inlines)
+        translate_c.defineCMacro("TRACY_NO_CALLSTACK", "1");
+    }
+    if (tracy_no_callstack_inlines) {
         tracy_client.root_module.addCMacro("TRACY_NO_CALLSTACK_INLINES", "1");
-    if (tracy_only_localhost)
+        translate_c.defineCMacro("TRACY_NO_CALLSTACK_INLINES", "1");
+    }
+    if (tracy_only_localhost) {
         tracy_client.root_module.addCMacro("TRACY_ONLY_LOCALHOST", "1");
-    if (tracy_no_broadcast)
+        translate_c.defineCMacro("TRACY_ONLY_LOCALHOST", "1");
+    }
+    if (tracy_no_broadcast) {
         tracy_client.root_module.addCMacro("TRACY_NO_BROADCAST", "1");
-    if (tracy_only_ipv4)
+        translate_c.defineCMacro("TRACY_NO_BROADCAST", "1");
+    }
+    if (tracy_only_ipv4) {
         tracy_client.root_module.addCMacro("TRACY_ONLY_IPV4", "1");
-    if (tracy_no_code_transfer)
+        translate_c.defineCMacro("TRACY_ONLY_IPV4", "1");
+    }
+    if (tracy_no_code_transfer) {
         tracy_client.root_module.addCMacro("TRACY_NO_CODE_TRANSFER", "1");
-    if (tracy_no_context_switch)
+        translate_c.defineCMacro("TRACY_NO_CODE_TRANSFER", "1");
+    }
+    if (tracy_no_context_switch) {
         tracy_client.root_module.addCMacro("TRACY_NO_CONTEXT_SWITCH", "1");
-    if (tracy_no_exit)
+        translate_c.defineCMacro("TRACY_NO_CONTEXT_SWITCH", "1");
+    }
+    if (tracy_no_exit) {
         tracy_client.root_module.addCMacro("TRACY_NO_EXIT", "1");
-    if (tracy_no_sampling)
+        translate_c.defineCMacro("TRACY_NO_EXIT", "1");
+    }
+    if (tracy_no_sampling) {
         tracy_client.root_module.addCMacro("TRACY_NO_SAMPLING", "1");
-    if (tracy_no_verify)
+        translate_c.defineCMacro("TRACY_NO_SAMPLING", "1");
+    }
+    if (tracy_no_verify) {
         tracy_client.root_module.addCMacro("TRACY_NO_VERIFY", "1");
-    if (tracy_no_vsync_capture)
+        translate_c.defineCMacro("TRACY_NO_VERIFY", "1");
+    }
+    if (tracy_no_vsync_capture) {
         tracy_client.root_module.addCMacro("TRACY_NO_VSYNC_CAPTURE", "1");
-    if (tracy_no_frame_image)
+        translate_c.defineCMacro("TRACY_NO_VSYNC_CAPTURE", "1");
+    }
+    if (tracy_no_frame_image) {
         tracy_client.root_module.addCMacro("TRACY_NO_FRAME_IMAGE", "1");
-    if (tracy_no_system_tracing)
+        translate_c.defineCMacro("TRACY_NO_FRAME_IMAGE", "1");
+    }
+    if (tracy_no_system_tracing) {
         tracy_client.root_module.addCMacro("TRACY_NO_SYSTEM_TRACING", "1");
-    if (tracy_delayed_init)
+        translate_c.defineCMacro("TRACY_NO_SYSTEM_TRACING", "1");
+    }
+    if (tracy_delayed_init) {
         tracy_client.root_module.addCMacro("TRACY_DELAYED_INIT", "1");
-    if (tracy_manual_lifetime)
+        translate_c.defineCMacro("TRACY_DELAYED_INIT", "1");
+    }
+    if (tracy_manual_lifetime) {
         tracy_client.root_module.addCMacro("TRACY_MANUAL_LIFETIME", "1");
-    if (tracy_fibers)
+        translate_c.defineCMacro("TRACY_MANUAL_LIFETIME", "1");
+    }
+    if (tracy_fibers) {
         tracy_client.root_module.addCMacro("TRACY_FIBERS", "1");
-    if (tracy_no_crash_handler)
+        translate_c.defineCMacro("TRACY_FIBERS", "1");
+    }
+    if (tracy_no_crash_handler) {
         tracy_client.root_module.addCMacro("TRACY_NO_CRASH_HANDLER", "1");
-    if (tracy_timer_fallback)
+        translate_c.defineCMacro("TRACY_NO_CRASH_HANDLER", "1");
+    }
+    if (tracy_timer_fallback) {
         tracy_client.root_module.addCMacro("TRACY_TIMER_FALLBACK", "1");
-    if (shared and target.result.os.tag == .windows)
+        translate_c.defineCMacro("TRACY_TIMER_FALLBACK", "1");
+    }
+    if (shared and target.result.os.tag == .windows) {
         tracy_client.root_module.addCMacro("TRACY_EXPORTS", "1");
+        translate_c.defineCMacro("TRACY_IMPORTS", "1");
+    }
     b.installArtifact(tracy_client);
-}
 
-fn digits2(value: usize) [2]u8 {
-    return ("0001020304050607080910111213141516171819" ++
-        "2021222324252627282930313233343536373839" ++
-        "4041424344454647484950515253545556575859" ++
-        "6061626364656667686970717273747576777879" ++
-        "8081828384858687888990919293949596979899")[value * 2 ..][0..2].*;
+    // Link the client into anything importing the module, so dependents only need the import.
+    if (tracy_enable) tracy_module.linkLibrary(tracy_client);
 }
 
 const tracy_header_files = [_][2][]const u8{

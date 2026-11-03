@@ -1,32 +1,6 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const options = @import("tracy-options");
-const c = @cImport({
-    if (options.tracy_enable) @cDefine("TRACY_ENABLE", {});
-    if (options.tracy_on_demand) @cDefine("TRACY_ON_DEMAND", {});
-    if (options.tracy_callstack) |depth| @cDefine("TRACY_CALLSTACK", "\"" ++ digits2(depth) ++ "\"");
-    if (options.tracy_no_callstack) @cDefine("TRACY_NO_CALLSTACK", {});
-    if (options.tracy_no_callstack_inlines) @cDefine("TRACY_NO_CALLSTACK_INLINES", {});
-    if (options.tracy_only_localhost) @cDefine("TRACY_ONLY_LOCALHOST", {});
-    if (options.tracy_no_broadcast) @cDefine("TRACY_NO_BROADCAST", {});
-    if (options.tracy_only_ipv4) @cDefine("TRACY_ONLY_IPV4", {});
-    if (options.tracy_no_code_transfer) @cDefine("TRACY_NO_CODE_TRANSFER", {});
-    if (options.tracy_no_context_switch) @cDefine("TRACY_NO_CONTEXT_SWITCH", {});
-    if (options.tracy_no_exit) @cDefine("TRACY_NO_EXIT", {});
-    if (options.tracy_no_sampling) @cDefine("TRACY_NO_SAMPLING", {});
-    if (options.tracy_no_verify) @cDefine("TRACY_NO_VERIFY", {});
-    if (options.tracy_no_vsync_capture) @cDefine("TRACY_NO_VSYNC_CAPTURE", {});
-    if (options.tracy_no_frame_image) @cDefine("TRACY_NO_FRAME_IMAGE", {});
-    if (options.tracy_no_system_tracing) @cDefine("TRACY_NO_SYSTEM_TRACING", {});
-    if (options.tracy_delayed_init) @cDefine("TRACY_DELAYED_INIT", {});
-    if (options.tracy_manual_lifetime) @cDefine("TRACY_MANUAL_LIFETIME", {});
-    if (options.tracy_fibers) @cDefine("TRACY_FIBERS", {});
-    if (options.tracy_no_crash_handler) @cDefine("TRACY_NO_CRASH_HANDLER", {});
-    if (options.tracy_timer_fallback) @cDefine("TRACY_TIMER_FALLBACK", {});
-    if (options.shared and builtin.os.tag == .windows) @cDefine("TRACY_IMPORTS", {});
-
-    @cInclude("tracy/TracyC.h");
-});
+const c = @import("tracy-c");
 
 pub inline fn setThreadName(comptime name: [:0]const u8) void {
     if (!options.tracy_enable) return;
@@ -156,12 +130,12 @@ pub inline fn plot(comptime T: type, comptime name: [:0]const u8, value: T) void
 
     const type_info = @typeInfo(T);
     switch (type_info) {
-        .Int => |int_type| {
+        .int => |int_type| {
             if (int_type.bits > 64) @compileError("Too large int to plot");
             if (int_type.signedness == .unsigned and int_type.bits > 63) @compileError("Too large unsigned int to plot");
             c.___tracy_emit_plot_int(name, value);
         },
-        .Float => |float_type| {
+        .float => |float_type| {
             if (float_type.bits <= 32) {
                 c.___tracy_emit_plot_float(name, value);
             } else if (float_type.bits <= 64) {
@@ -218,10 +192,10 @@ pub inline fn print(comptime fmt: []const u8, args: anytype) void {
     if (!options.tracy_enable) return;
     const depth = options.tracy_callstack orelse 0;
 
-    var stream = std.io.fixedBufferStream(&tracy_message_buffer);
-    stream.writer().print(fmt, args) catch {};
+    var writer = std.Io.Writer.fixed(&tracy_message_buffer);
+    writer.print(fmt, args) catch {};
 
-    const written = stream.getWritten();
+    const written = writer.buffered();
     c.___tracy_emit_message(written.ptr, written.len, depth);
 }
 
@@ -229,21 +203,20 @@ pub inline fn printColor(comptime fmt: []const u8, args: anytype, color: u32) vo
     if (!options.tracy_enable) return;
     const depth = options.tracy_callstack orelse 0;
 
-    var stream = std.io.fixedBufferStream(&tracy_message_buffer);
-    stream.writer().print(fmt, args) catch {};
+    var writer = std.Io.Writer.fixed(&tracy_message_buffer);
+    writer.print(fmt, args) catch {};
 
-    const written = stream.getWritten();
+    const written = writer.buffered();
     c.___tracy_emit_messageC(written.ptr, written.len, color, depth);
 }
 
 pub inline fn printAppInfo(comptime fmt: []const u8, args: anytype) void {
     if (!options.tracy_enable) return;
 
-    var stream = std.io.fixedBufferStream(&tracy_message_buffer);
-    stream.reset();
-    stream.writer().print(fmt, args) catch {};
+    var writer = std.Io.Writer.fixed(&tracy_message_buffer);
+    writer.print(fmt, args) catch {};
 
-    const written = stream.getWritten();
+    const written = writer.buffered();
     c.___tracy_emit_message_appinfo(written.ptr, written.len);
 }
 
@@ -273,78 +246,56 @@ pub const TracingAllocator = struct {
             .vtable = &.{
                 .alloc = alloc,
                 .resize = resize,
+                .remap = remap,
                 .free = free,
             },
         };
     }
 
-    fn alloc(
-        ctx: *anyopaque,
-        len: usize,
-        ptr_align: u8,
-        ret_addr: usize,
-    ) ?[*]u8 {
-        const self: *Self = @ptrCast(@alignCast(ctx));
-        const result = self.parent_allocator.rawAlloc(len, ptr_align, ret_addr);
-        if (!options.tracy_enable) return result;
-
+    inline fn emitAlloc(self: *Self, ptr: [*]const u8, len: usize) void {
+        if (!options.tracy_enable) return;
         if (self.pool_name) |name| {
-            c.___tracy_emit_memory_alloc_named(result, len, 0, name.ptr);
+            c.___tracy_emit_memory_alloc_named(ptr, len, 0, name.ptr);
         } else {
-            c.___tracy_emit_memory_alloc(result, len, 0);
+            c.___tracy_emit_memory_alloc(ptr, len, 0);
         }
+    }
 
+    inline fn emitFree(self: *Self, ptr: [*]const u8) void {
+        if (!options.tracy_enable) return;
+        if (self.pool_name) |name| {
+            c.___tracy_emit_memory_free_named(ptr, 0, name.ptr);
+        } else {
+            c.___tracy_emit_memory_free(ptr, 0);
+        }
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawAlloc(len, alignment, ret_addr) orelse return null;
+        self.emitAlloc(result, len);
         return result;
     }
 
-    fn resize(
-        ctx: *anyopaque,
-        buf: []u8,
-        buf_align: u8,
-        new_len: usize,
-        ret_addr: usize,
-    ) bool {
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
         const self: *Self = @ptrCast(@alignCast(ctx));
-        const result = self.parent_allocator.rawResize(buf, buf_align, new_len, ret_addr);
-        if (!result) return false;
-
-        if (!options.tracy_enable) return true;
-
-        if (self.pool_name) |name| {
-            c.___tracy_emit_memory_free_named(buf.ptr, 0, name.ptr);
-            c.___tracy_emit_memory_alloc_named(buf.ptr, new_len, 0, name.ptr);
-        } else {
-            c.___tracy_emit_memory_free(buf.ptr, 0);
-            c.___tracy_emit_memory_alloc(buf.ptr, new_len, 0);
-        }
-
+        if (!self.parent_allocator.rawResize(memory, alignment, new_len, ret_addr)) return false;
+        self.emitFree(memory.ptr);
+        self.emitAlloc(memory.ptr, new_len);
         return true;
     }
 
-    fn free(
-        ctx: *anyopaque,
-        buf: []u8,
-        buf_align: u8,
-        ret_addr: usize,
-    ) void {
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
         const self: *Self = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
+        self.emitFree(memory.ptr);
+        self.emitAlloc(result, new_len);
+        return result;
+    }
 
-        if (options.tracy_enable) {
-            if (self.pool_name) |name| {
-                c.___tracy_emit_memory_free_named(buf.ptr, 0, name.ptr);
-            } else {
-                c.___tracy_emit_memory_free(buf.ptr, 0);
-            }
-        }
-
-        self.parent_allocator.rawFree(buf, buf_align, ret_addr);
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.emitFree(memory.ptr);
+        self.parent_allocator.rawFree(memory, alignment, ret_addr);
     }
 };
-
-fn digits2(value: usize) [2]u8 {
-    return ("0001020304050607080910111213141516171819" ++
-        "2021222324252627282930313233343536373839" ++
-        "4041424344454647484950515253545556575859" ++
-        "6061626364656667686970717273747576777879" ++
-        "8081828384858687888990919293949596979899")[value * 2 ..][0..2].*;
-}
