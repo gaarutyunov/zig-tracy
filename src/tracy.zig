@@ -95,6 +95,35 @@ const ZoneContext = if (options.tracy_enable) extern struct {
     pub inline fn value(_: *const ZoneContext, _: u64) void {}
 };
 
+/// The source location of a zone, for one whose name, function, file or line is only known at
+/// runtime (see `initZoneAt`). Tracy may read it any time after a zone used it, so it must stay
+/// valid and unchanged from then on, e.g. in a global.
+pub const SourceLocation = if (options.tracy_enable) c.___tracy_source_location_data else struct {
+    name: ?[*:0]const u8 = null,
+    function: ?[*:0]const u8 = null,
+    file: ?[*:0]const u8 = null,
+    line: u32 = 0,
+    color: u32 = 0,
+};
+
+/// Like `initZone`, with a source location given at runtime.
+pub inline fn initZoneAt(src_loc: *const SourceLocation, comptime opts: struct { active: bool = true }) ZoneContext {
+    if (!options.tracy_enable) return .{};
+    const active: c_int = @intFromBool(opts.active);
+
+    if (!options.tracy_no_callstack) {
+        if (options.tracy_callstack) |depth| {
+            return .{
+                .ctx = c.___tracy_emit_zone_begin_callstack(src_loc, depth, active),
+            };
+        }
+    }
+
+    return .{
+        .ctx = c.___tracy_emit_zone_begin(src_loc, active),
+    };
+}
+
 pub inline fn initZone(comptime src: std.builtin.SourceLocation, comptime opts: ZoneOptions) ZoneContext {
     if (!options.tracy_enable) return .{};
     const active: c_int = @intFromBool(opts.active);
@@ -166,7 +195,7 @@ pub inline fn plotConfig(comptime name: [:0]const u8, comptime config: PlotConfi
     if (!options.tracy_enable) return;
     c.___tracy_emit_plot_config(
         name,
-        @intFromEnum(config.plot_type),
+        @backingInt(config.plot_type),
         config.step,
         config.fill,
         config.color,
